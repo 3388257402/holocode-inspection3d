@@ -62,6 +62,9 @@ npm run dev          # 默认 http://localhost:5173
 
 ### 3. Unity 客户端（Editor 里直接跑，不需要手机、不需要 AR 设备）
 
+> 改过启动脚本后请跑一次自检：`powershell -ExecutionPolicy Bypass -File tools\verify-launcher.ps1`
+> （它检查 .bat 是否仍是纯 ASCII+CRLF、.ps1 是否仍是 UTF-8 with BOM——这两条被破坏过两次，都会导致静默失效）
+>
 > **最省事的路径：双击 `打开Unity工程.bat`。**
 > 它会从 `ProjectSettings/ProjectVersion.txt` 读出工程要求的版本，
 > 找到对应编辑器并用独立进程打开工程；首次启动会让你登录 Unity 账号（Personal 免费）。

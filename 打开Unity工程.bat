@@ -10,24 +10,34 @@ REM    parser apart (variables expanded to empty -> editor launched with an empt
 REM    project path), then a "(x86)" path crashed the script with no message.
 REM    Path and version logic belongs in PowerShell, not here.
 REM
-REM  Maintenance rule for THIS file: ASCII only + CRLF line endings.
+REM  Maintenance rules for THIS file:
+REM    - ASCII only + CRLF line endings (verify: tools\verify-launcher.ps1)
+REM    - restore the caller's code page on exit (chcp is process-global and is
+REM      NOT undone by setlocal, so a caller sitting in a cmd window would
+REM      otherwise be left on 65001)
 REM ============================================================================
-chcp 65001 >nul
 setlocal
+for /f "tokens=2 delims=:" %%C in ('chcp') do set "OLDCP=%%C"
+if defined OLDCP set "OLDCP=%OLDCP: =%"
+chcp 65001 >nul
 
 if not exist "%~dp0scripts\open-unity.ps1" (
   echo [ERROR] scripts\open-unity.ps1 is missing.
-  if not defined UNITY_LAUNCHER_NO_PAUSE pause
-  exit /b 1
+  set "RC=1"
+  goto :finish
 )
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\open-unity.ps1" %*
 set "RC=%ERRORLEVEL%"
 
+:finish
+if defined OLDCP chcp %OLDCP% >nul
 if not "%RC%"=="0" (
   echo.
   echo Script exited with code %RC%.
-  echo Set UNITY_LAUNCHER_NO_PAUSE=1 before calling this to skip the pause when scripted.
-  if not defined UNITY_LAUNCHER_NO_PAUSE pause
+  if not defined UNITY_LAUNCHER_NO_PAUSE (
+    echo Set UNITY_LAUNCHER_NO_PAUSE=1 before calling this to skip the pause when scripted.
+    pause
+  )
 )
 exit /b %RC%
