@@ -1,19 +1,21 @@
 #!/bin/sh
 # pre-commit：提交前跑启动脚本的维护规则检查。
 #
-# 为什么需要这个 hook：检查器存在 ≠ 检查被执行。这两条规则（.bat 必须 ASCII+CRLF、
-# .ps1 必须 UTF-8 BOM）已经被破坏过两次，每次都导致"看起来成功、其实用空路径启动编辑器"
-# 或"整段脚本解析失败"。放在 hook 里是当前成本最低的自动触发点（不需要 CI）。
+# 检查的是**索引里的内容**，不是磁盘上的工作区。
+# 为什么：这两种状态经常不一致（`git status` 的 `MM` 就是"暂存了一版、工作区又改了一版"）。
+# 若只查工作区，就可能出现"工作区已修好、提交进去的是坏版本"，而无 BOM 的 .ps1
+# 对每个 clone 都是坏的（.bat 还有 .gitattributes 的 eol=crlf 兜底，.ps1 没有）。
+# 做法：用 `git checkout-index -a --prefix=<临时目录>/` 把**整个索引**导出来，
+# 再对那个镜像跑 tools/verify-launcher.ps1 —— 等价于"检查这次提交真正包含的文件"。
 #
 # 启用方式（每个 clone 一次）：
 #   git config core.hooksPath .githooks
 #
-# 跑的是同一个 tools/verify-launcher.ps1，和 README 里写的手动自检一致。
+# 逃生口：git commit --no-verify
 
-# 前提工具缺失时必须**拒绝提交**（fail-closed），不能静默放行：
-# 实测过 PATH 里没有 grep 时脚本直接 exit 0、没有 git 时 REPO_ROOT 变空 ->
-# 拼出 /tools/verify-launcher.ps1 -> 判定"文件不存在" -> 跳过检查。
-# 这两种情况都会把"工具缺失"伪装成"检查通过"，比没有 hook 更危险。
+# 前提工具缺失时必须 fail-closed：实测过 PATH 里没有 grep 时脚本直接 exit 0、
+# 没有 git 时 REPO_ROOT 变空 -> 拼出 /tools/verify-launcher.ps1 -> "文件不存在" -> 跳过检查。
+# 这两种都会把"工具缺失"伪装成"检查通过"，比没有 hook 更危险。
 command -v git  >/dev/null 2>&1 || { echo "[pre-commit] 找不到 git，拒绝在未检查的情况下放行" >&2; exit 1; }
 command -v grep >/dev/null 2>&1 || { echo "[pre-commit] 找不到 grep，拒绝在未检查的情况下放行" >&2; exit 1; }
 
@@ -31,11 +33,24 @@ fi
 # "\346\211\223..."（带引号、八进制转义），于是 `\.bat$` 永远匹配不上
 # —— 中文名的启动脚本就会被静默跳过检查（实测过：弄坏 .bat 后提交照样成功）。
 if git -c core.quotepath=false diff --cached --name-only | grep -Eq '\.(bat|cmd|ps1|gitattributes)$'; then
-    echo "[pre-commit] 检查启动脚本维护规则..."
-    if ! powershell -NoProfile -ExecutionPolicy Bypass -File "$CHECKER"; then
+    echo "[pre-commit] 检查启动脚本维护规则（针对索引内容）..."
+
+    MIRROR="${TMPDIR:-/tmp}/holocode-precommit.$$"
+    rm -rf "$MIRROR"
+    mkdir -p "$MIRROR"
+    # trap 保证无论检查成功失败都清理临时镜像
+    trap 'rm -rf "$MIRROR"' EXIT
+
+    if ! git checkout-index -a --prefix="$MIRROR"/; then
+        echo "[pre-commit] 导出索引失败，拒绝在未检查的情况下放行" >&2
+        exit 1
+    fi
+
+    if ! powershell -NoProfile -ExecutionPolicy Bypass -File "$CHECKER" -RepoRoot "$MIRROR"; then
         echo ""
         echo "[pre-commit] 启动脚本规则未通过，已阻止提交。" >&2
-        echo "             修好后重试，或临时用 git commit --no-verify 跳过。" >&2
+        echo "             （检查的是本次提交将要包含的内容，不是工作区）" >&2
+        echo "             修好后 git add 再重试，或临时用 git commit --no-verify 跳过。" >&2
         exit 1
     fi
 fi

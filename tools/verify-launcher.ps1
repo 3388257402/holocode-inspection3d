@@ -53,7 +53,10 @@ foreach ($dir in @($RepoRoot, (Join-Path $RepoRoot "scripts"), (Join-Path $RepoR
 }
 $batFiles = @($batFiles | Sort-Object FullName -Unique)
 
-Check "至少存在一个启动脚本" ($batFiles.Count -gt 0) "根目录/scripts/tools 下没有任何 .bat"
+# 具名断言：README 里让用户双击的就是这个文件；只查"至少存在一个 .bat"的话，
+# 把它删掉、留下任意 .cmd 也能全绿（实测过这种退化）。
+Check "打开Unity工程.bat 存在" (Test-Path -LiteralPath (Join-Path $RepoRoot "打开Unity工程.bat")) "README 里让用户双击的就是它"
+Check "至少存在一个 .bat/.cmd" ($batFiles.Count -gt 0) "根目录/scripts/tools 下没有任何 .bat/.cmd"
 
 foreach ($bat in $batFiles) {
     $label = $bat.Name
