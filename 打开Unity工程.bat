@@ -17,7 +17,7 @@ setlocal
 
 if not exist "%~dp0scripts\open-unity.ps1" (
   echo [ERROR] scripts\open-unity.ps1 is missing.
-  pause
+  if not defined UNITY_LAUNCHER_NO_PAUSE pause
   exit /b 1
 )
 
@@ -27,6 +27,7 @@ set "RC=%ERRORLEVEL%"
 if not "%RC%"=="0" (
   echo.
   echo Script exited with code %RC%.
-  pause
+  echo Set UNITY_LAUNCHER_NO_PAUSE=1 before calling this to skip the pause when scripted.
+  if not defined UNITY_LAUNCHER_NO_PAUSE pause
 )
 exit /b %RC%

@@ -16,6 +16,10 @@
 #   PowerShell 5.1 下单元素结果**不是数组**，`$x.Count` 可能是 $null，
 #   于是 `if ($x.Count -gt 0)` 恒为假。所有"可能只有一项"的结果必须用 @(...) 包起来。
 #
+# 本文件的编码要求：**必须保存为 UTF-8 with BOM**。
+#   Windows PowerShell 5.1 读无 BOM 的 .ps1 会按 ANSI(GBK) 解释，中文字节可能连带吃掉
+#   后面的引号 → 整段脚本解析失败。这条和 .bat 的 CRLF 要求是同一类坑，别再踩第三次。
+#
 # 用法：
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\open-unity.ps1
 #   ... -DryRun                 只打印将要执行的命令，不真的启动（验证用）
@@ -99,7 +103,17 @@ foreach ($root in $hubRoots) {
         }
     }
 }
-$installed = @($installed | Sort-Object Version -Unique)
+
+# 按**语义版本**排序，而不是字符串序。
+# 为什么：字符串序下 "2022.3.10f1" < "2022.3.9f1"，同 minor 多补丁版本时会推荐错的那个。
+# 解析失败（目录名不规范）的排在最后，不让它顶到第一位。
+$installed = @(
+    $installed | Sort-Object -Property @{
+        Expression = {
+            try { [version](($_.Version -split 'f')[0]) } catch { [version]'0.0.0' }
+        }
+    } -Descending
+)
 
 # ---------------------------------------------------------------- 3. 选择
 $chosen = $candidates | Select-Object -First 1
