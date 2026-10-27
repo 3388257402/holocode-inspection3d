@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>园区巡检 · 管理端</title>
+    <script>
+      // 在模块脚本之前执行：允许**同一份构建产物**用 URL 参数指定后端地址，
+      // 例如 http://localhost:4173/?api=http://192.168.1.10:8080
+      // 为什么需要它：VITE_API_BASE 是构建期烘焙的，`preview`/静态部署时改不了；
+      // 评审人只要改一个 URL 参数就能指向自己的后端，不必重新 build。
+      (function () {
+        try {
+          var raw = new URLSearchParams(window.location.search).get("api");
+          // 归一化**放在判空之前**：`?api=/`、`?api=  /  ` 归一化后是空串，
+          // 先判空会把它们当成有效值注入进来，fetch 就会打到前端自己的同源路径。
+          var norm = (raw || "").trim().replace(/\/+$/, "");
+          if (!norm) {
+            if (raw !== null) window.__INSPECTION_API_WARNING__ = "参数 api 为空，已使用默认地址。";
+            return;
+          }
+          // 只接受可解析的 http/https 纯 origin 地址：链接是可以被转发的，
+          // 不能让 `?api=javascript:...` 这类值一路传到网络层；带路径/查询串的基址
+          // 拼 /api/issues 会打错位置（表现为"后端 404"而不是"地址填错"）。
+          var parsed;
+          try {
+            parsed = new URL(norm);
+          } catch (e) {
+            window.__INSPECTION_API_WARNING__ = "参数 api 不是合法地址（" + norm + "），已使用默认地址。";
+            return;
+          }
+          if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+            window.__INSPECTION_API_WARNING__ = "参数 api 只支持 http/https（收到 " + norm + "），已使用默认地址。";
+            return;
+          }
+          if (parsed.pathname !== "/" || parsed.search !== "" || parsed.hash !== "") {
+            window.__INSPECTION_API_WARNING__ = "参数 api 只能是 origin（如 http://ip:8080），不能带路径（收到 " + norm + "），已使用默认地址。";
+            return;
+          }
+          // 用 origin 而不是 norm：URL 规范化后根地址会带尾斜杠，拼出 `//api/issues`。
+          window.__INSPECTION_API__ = parsed.origin;
+        } catch (e) {
+          /* 老浏览器的 URLSearchParams 缺失时静默跳过，回退到默认地址 */
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
