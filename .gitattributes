@@ -1,0 +1,4 @@
+# .bat 必须用 CRLF：cmd.exe 按字节偏移切分脚本行，
+# 纯 LF + 中文会让变量展开成空串（实测过：%UNITY% / %PROJ% 都变空）。
+*.bat text eol=crlf
+*.cmd text eol=crlf
