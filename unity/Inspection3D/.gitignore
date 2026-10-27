@@ -1,0 +1,19 @@
+# Unity 自动生成目录 —— 不要进仓库。
+#
+# 为什么这些必须忽略：
+#   Library/ 是**机器相关**的导入缓存（几百 MB，换机器必重建）；
+#   Temp/ Logs/ obj/ 是构建与运行产物；
+#   UserSettings/ 是个人编辑器布局（会让别人的 Unity 记住你的窗口位置）。
+# 题目也明确说了"不需要上传 Library、Temp、Logs"，但应保留 Assets/Packages/ProjectSettings。
+Library/
+Temp/
+Obj/
+obj/
+Logs/
+UserSettings/
+Build/
+Builds/
+*.csproj
+*.sln
+*.user
+.vs/
