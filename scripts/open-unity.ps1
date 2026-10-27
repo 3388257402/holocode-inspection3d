@@ -33,28 +33,55 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# 未知参数必须硬报错：PS 5.1 对未声明的参数会**静默忽略**，
+# 未声明的具名参数必须硬报错：PS 5.1 对它们会**静默忽略**，
 # 于是把 -DryRun 打成 -Dryrn 时会真的启动编辑器（安全阀失效），实测过。
-# 副作用：本脚本从此不接受位置参数 / `$args`，当前也没有任何地方依赖它。
+# 注意边界：单个**位置参数**仍会按位置绑定到 -ProjectPath（把工程文件夹拖到 .bat 上就能用），
+# 只有多余的位置参数才落进 $args 被这里拦下。
 if ($args.Count -gt 0) {
     Write-Host "[ERROR] 无法识别的参数：$($args -join ' ')" -ForegroundColor Red
     Write-Host "        支持：-ProjectPath <路径> / -DryRun / -AcceptDifferentPatch"
     exit 1
 }
 
-if (-not $ProjectPath) {
+if ($PSBoundParameters.ContainsKey('ProjectPath')) {
+    # 显式传了 -ProjectPath 就必须当回事：传空串通常意味着"变量没设"（例如 $env:PROJ 为空），
+    # 静默回退到默认工程会让人以为打开的是自己指定的那个（实测过这种"看起来成功"）。
+    if ([string]::IsNullOrWhiteSpace($ProjectPath)) {
+        Write-Host "[ERROR] -ProjectPath 是空字符串。要么不传（用默认工程），要么传一个真实路径。" -ForegroundColor Red
+        exit 1
+    }
+} else {
     $repoRoot = Split-Path -Parent $PSScriptRoot   # <repo>\scripts -> <repo>
     $ProjectPath = Join-Path $repoRoot "unity\Inspection3D"
 }
 
-# 归一化：去掉尾随分隔符并转绝对路径。
-# 为什么必须在**读版本文件之前**做：`Start-Process -ArgumentList @("-projectPath", "`"$ProjectPath`"")`
-# 里若路径以 `\` 结尾，CRT 会把 `\"` 当成转义引号 → Unity 收到 `"...\proj" ` 这种非法值。
+# 归一化：转绝对路径 + 去掉尾随分隔符。两件事都必须在**读版本文件之前**做。
+#
+# 为什么相对路径不能用 [IO.Path]::GetFullPath：它按**进程工作目录**解析，
+# 而 Test-Path/Get-ChildItem 按 PowerShell 的当前位置（$PWD）解析。同进程里 cd 过之后两者会分叉
+# （实测：PWD=仓库而 EnvCD=启动目录时，Test-Path 认为存在、GetFullPath 却指向别处 →
+#  要么报"找不到版本文件"，要么**静默打开启动目录下的同名工程**）。
+# 所以相对路径走 PowerShell 自己的路径解析；绝对路径才交给 GetFullPath。
+# 顺带解决"进程位置不在文件系统"（如 HKLM:）的情况——那种会抛异常，走下面的 catch。
+#
+# 为什么必须去掉尾随 `\`：`Start-Process -ArgumentList @("-projectPath", "`"$ProjectPath`"")` 里
+# 若路径以 `\` 结尾，CRT 会把 `\"` 当成转义引号 → Unity 收到 `"...\proj" ` 这种非法值。
 # 这个 bug 在 -DryRun 打印里看不出来，只有真启动才炸（实测：探针收到 [C:\x\proj" ]）。
 try {
-    $ProjectPath = [System.IO.Path]::GetFullPath($ProjectPath).TrimEnd('\', '/')
+    # 只有"完整的绝对路径"（盘符 + 分隔符）才交给 GetFullPath；
+    # 其余一律走 PowerShell 的解析：
+    #   - `C:proj`（盘符相对）虽然 IsPathRooted 为 True，但 GetFullPath 会按**盘符当前目录**
+    #     解析，仍然与 $PWD 分叉（实测过）；
+    #   - `\\server\share` 形式不完整时 GetFullPath 直接抛异常。
+    if ($ProjectPath -match '^[A-Za-z]:[\\/]') {
+        $ProjectPath = [System.IO.Path]::GetFullPath($ProjectPath)
+    } else {
+        $ProjectPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ProjectPath)
+    }
+    $ProjectPath = $ProjectPath.TrimEnd('\', '/')
 } catch {
-    Write-Host "[ERROR] ProjectPath 不是合法路径：$ProjectPath" -ForegroundColor Red
+    Write-Host "[ERROR] ProjectPath 无法解析成文件系统路径：$ProjectPath" -ForegroundColor Red
+    Write-Host "        当前 PowerShell 位置：$($PWD.Path)"
     exit 1
 }
 
@@ -88,35 +115,87 @@ function Add-Candidate([string]$exe) {
 }
 
 # 2a. Hub 默认安装目录（64 位 / 32 位两种 ProgramFiles）
-Add-Candidate (Join-Path $env:ProgramFiles "Unity\Hub\Editor\$wanted\Editor\Unity.exe")
-if (${env:ProgramFiles(x86)}) {
-    Add-Candidate (Join-Path ${env:ProgramFiles(x86)} "Unity\Hub\Editor\$wanted\Editor\Unity.exe")
+# 用函数判空再拼：$env:ProgramFiles 在极简环境里可能为空，直接 Join-Path 会抛未捕获的绑定异常
+# （实测：打印完"工程要求"就裸栈中断，所有友好失败分支都走不到）。
+function Join-HubPath([string]$programFiles, [string]$relative) {
+    if ([string]::IsNullOrWhiteSpace($programFiles)) { return $null }
+    return (Join-Path $programFiles $relative)
 }
+
+$pf64 = $env:ProgramFiles
+$pf86 = ${env:ProgramFiles(x86)}
+
+Add-Candidate (Join-HubPath $pf64 "Unity\Hub\Editor\$wanted\Editor\Unity.exe")
+Add-Candidate (Join-HubPath $pf86 "Unity\Hub\Editor\$wanted\Editor\Unity.exe")
 
 # 2b. Hub 的"第二安装位置"：既是候选来源，也要并入下面的扫描根，
 #     否则"本机已装"列表会漏掉装在别的盘上的版本（极端时会误报"本机没有编辑器"）。
-$hubRoots = @((Join-Path $env:ProgramFiles "Unity\Hub\Editor"))
-if (${env:ProgramFiles(x86)}) { $hubRoots += (Join-Path ${env:ProgramFiles(x86)} "Unity\Hub\Editor") }
+$hubRoots = @()
+$r = Join-HubPath $pf64 "Unity\Hub\Editor"; if ($r) { $hubRoots += $r }
+$r = Join-HubPath $pf86 "Unity\Hub\Editor"; if ($r) { $hubRoots += $r }
 
-$secondaryJson = Join-Path $env:APPDATA "UnityHub\secondaryInstallPath.json"
-if (Test-Path -LiteralPath $secondaryJson) {
+$secondaryJson = Join-HubPath $env:APPDATA "UnityHub\secondaryInstallPath.json"
+if ($secondaryJson -and (Test-Path -LiteralPath $secondaryJson)) {
+    # 分三步读，而不是一句 ConvertFrom-Json 包住全部：
+    # 空文件与字面 null 都会让后面的 .Trim()/.GetType() 抛异常，被 catch 说成"解析失败"——
+    # 而实际上**什么都没解析失败**，这会把正常机器误报成配置损坏。
+    $raw = $null
+    $readOk = $false
     try {
-        $secondary = (Get-Content -LiteralPath $secondaryJson -Raw).Trim() | ConvertFrom-Json
-        if ($secondary -is [string] -and -not [string]::IsNullOrWhiteSpace($secondary)) {
-            if (Test-Path -LiteralPath $secondary) {
-                Add-Candidate (Join-Path $secondary "$wanted\Editor\Unity.exe")
-                $hubRoots += $secondary
-            } else {
-                Write-Host "[WARN] secondaryInstallPath.json 指向的目录不存在：$secondary" -ForegroundColor Yellow
-            }
-        } else {
-            # 不能静默：形状不对时用户会以为"第二安装位置"已生效，实际整段被忽略，
-            # 最后只看到"找不到编辑器"这种误导性结论。
-            Write-Host "[WARN] secondaryInstallPath.json 内容不是路径字符串（实际类型：$($secondary.GetType().Name)），已忽略" -ForegroundColor Yellow
-            Write-Host "       请在 Unity Hub 的偏好设置里重新指定安装位置"
-        }
+        $raw = Get-Content -LiteralPath $secondaryJson -Raw
+        $readOk = $true
     } catch {
-        Write-Host "[WARN] secondaryInstallPath.json 解析失败，已忽略：$($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "[WARN] 读不到 secondaryInstallPath.json：$($_.Exception.Message)" -ForegroundColor Yellow
+    }
+
+    # 读失败与"文件为空"是两件事，不能合并：都走"空文件"分支会把 IO 故障
+    # 说成正常状态（实测：把 json 建成目录 → 同时出现"读不到"和"是空文件"两条自相矛盾的话）。
+    if (-not $readOk) {
+        Write-Host "       这一项被跳过，其余检查照常进行。" -ForegroundColor DarkGray
+    }
+    elseif ([string]::IsNullOrWhiteSpace($raw)) {
+        Write-Host "[INFO] secondaryInstallPath.json 是空文件，按「未配置第二安装位置」处理" -ForegroundColor DarkGray
+    } else {
+        $secondary = $null
+        $parsed = $true
+        try {
+            $secondary = $raw.Trim() | ConvertFrom-Json
+        } catch {
+            $parsed = $false
+            Write-Host "[WARN] secondaryInstallPath.json 不是合法 JSON，已忽略：$($_.Exception.Message)" -ForegroundColor Yellow
+        }
+
+        if ($parsed) {
+            if ($null -eq $secondary) {
+                # Hub 清空第二安装位置时写的可能就是字面 null —— 正常状态，不是错误。
+                Write-Host "[INFO] secondaryInstallPath.json 内容是 null，按「未配置第二安装位置」处理" -ForegroundColor DarkGray
+            }
+            elseif ($secondary -is [string]) {
+                $secPath = $secondary.Trim().TrimEnd('\', '/')   # 归一化，否则拼出 ...\SEC\\2022.3.x
+                if ([string]::IsNullOrWhiteSpace($secPath)) {
+                    Write-Host "[INFO] secondaryInstallPath.json 里是空字符串，按「未配置第二安装位置」处理" -ForegroundColor DarkGray
+                }
+                else {
+                    # Test-Path 对含非法字符的路径（如 `C:\bad|name`）会抛 ArgumentException，
+                    # 不能用 -ErrorAction Stop 之外的默认行为直接调用：那会裸栈中断，
+                    # 让用户看到 "Illegal characters in path" 而不是下面的友好 WARN（实测复现过）。
+                    # -ErrorAction SilentlyContinue 让它返回 $false，与"目录不存在"合并处理。
+                    $secExists = Test-Path -LiteralPath $secPath -ErrorAction SilentlyContinue
+                    if ($secExists) {
+                        Add-Candidate (Join-Path $secPath "$wanted\Editor\Unity.exe")
+                        $hubRoots += $secPath
+                        Write-Host "       已读取第二安装位置：$secPath" -ForegroundColor DarkGray
+                    } else {
+                        Write-Host "[WARN] secondaryInstallPath.json 指向的目录不存在或路径非法：$secPath" -ForegroundColor Yellow
+                    }
+                }
+            }
+            else {
+                # 形状不对必须说清（不能静默丢掉），否则用户会以为第二安装位置已生效。
+                Write-Host "[WARN] secondaryInstallPath.json 内容不是路径字符串（实际类型：$($secondary.GetType().Name)），已忽略" -ForegroundColor Yellow
+                Write-Host "       请在 Unity Hub 的偏好设置里重新指定安装位置"
+            }
+        }
     }
 }
 

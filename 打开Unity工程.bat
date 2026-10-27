@@ -31,7 +31,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\open-unity.ps1
 set "RC=%ERRORLEVEL%"
 
 :finish
-if defined OLDCP chcp %OLDCP% >nul
 if not "%RC%"=="0" (
   echo.
   echo Script exited with code %RC%.
@@ -39,5 +38,15 @@ if not "%RC%"=="0" (
     echo Set UNITY_LAUNCHER_NO_PAUSE=1 before calling this to skip the pause when scripted.
     pause
   )
+)
+REM Restore the caller's code page LAST, right before exiting.
+REM Order matters: chcp is process-global, and if we restored it before the messages
+REM above, a redirected run would mix encodings in one stream (the PowerShell part in
+REM UTF-8, the cmd part in the caller's code page) - unreadable for both decoders.
+REM Strip a trailing dot first: some locales print "Active code page: 850." and
+REM "chcp 850." is rejected by cmd, which would leave the caller on 65001 silently.
+if defined OLDCP (
+  for /f "delims=." %%A in ("%OLDCP%") do set "CP=%%A"
+  echo !CP!| findstr /r /c:"^[0-9][0-9]*$" >nul && chcp !CP! >nul
 )
 exit /b %RC%

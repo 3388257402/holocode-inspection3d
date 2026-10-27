@@ -63,7 +63,15 @@ npm run dev          # 默认 http://localhost:5173
 ### 3. Unity 客户端（Editor 里直接跑，不需要手机、不需要 AR 设备）
 
 > 改过启动脚本后请跑一次自检：`powershell -ExecutionPolicy Bypass -File tools\verify-launcher.ps1`
-> （它检查 .bat 是否仍是纯 ASCII+CRLF、.ps1 是否仍是 UTF-8 with BOM——这两条被破坏过两次，都会导致静默失效）
+> （它遍历所有 `.bat`/`.ps1`，检查 .bat 是否仍是纯 ASCII+CRLF、.ps1 是否仍是 UTF-8 with BOM 且语法可解析——
+> 这两条被破坏过两次，都会导致静默失效：一次是空路径启动编辑器，一次是整段脚本解析失败）
+>
+> **想让检查自动生效（每个 clone 做一次）：**
+> ```bash
+> git config core.hooksPath .githooks
+> ```
+> 之后提交前会自动跑同一个检查；紧急时可 `git commit --no-verify` 跳过。
+> 注意 `core.hooksPath` 是本地配置，不会随仓库分发，所以新 clone 需要手动执行上面这行。
 >
 > **最省事的路径：双击 `打开Unity工程.bat`。**
 > 它会从 `ProjectSettings/ProjectVersion.txt` 读出工程要求的版本，
