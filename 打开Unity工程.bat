@@ -45,8 +45,14 @@ REM above, a redirected run would mix encodings in one stream (the PowerShell pa
 REM UTF-8, the cmd part in the caller's code page) - unreadable for both decoders.
 REM Strip a trailing dot first: some locales print "Active code page: 850." and
 REM "chcp 850." is rejected by cmd, which would leave the caller on 65001 silently.
+REM
+REM Use %%A directly instead of a !VAR! temp: this file does NOT enable delayed
+REM expansion (deliberately - see top of file: !VAR! would eat "!" inside %* paths),
+REM and under normal expansion "!CP!" stays literal, so findstr never matches and the
+REM restore is skipped silently. That regression was measured (caller stayed on 65001).
 if defined OLDCP (
-  for /f "delims=." %%A in ("%OLDCP%") do set "CP=%%A"
-  echo !CP!| findstr /r /c:"^[0-9][0-9]*$" >nul && chcp !CP! >nul
+  for /f "delims=." %%A in ("%OLDCP%") do (
+    echo %%A| findstr /r /c:"^[0-9][0-9]*$" >nul && chcp %%A >nul
+  )
 )
 exit /b %RC%

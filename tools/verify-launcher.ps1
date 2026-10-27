@@ -31,7 +31,7 @@ Write-Host "检查启动脚本的维护规则（$RepoRoot）"
 #     有它们意味着"改了一半没落位"，而检查器只查正式文件名时会被它们骗过。
 #     注意：这里逐个扩展名用 -Filter 查，而不是 -Include —— 在 -LiteralPath 下
 #     -Include 会被忽略并返回**全部**文件（第一次写就踩了：把 node_modules 当残稿报出来）。
-$scriptDirs = @($RepoRoot, (Join-Path $RepoRoot "scripts"), (Join-Path $RepoRoot "tools"))
+$scriptDirs = @($RepoRoot, (Join-Path $RepoRoot "scripts"), (Join-Path $RepoRoot "tools"), (Join-Path $RepoRoot ".githooks"))
 $residue = @()
 foreach ($dir in $scriptDirs) {
     if (-not (Test-Path -LiteralPath $dir)) { continue }
@@ -102,6 +102,21 @@ foreach ($ps1 in $ps1Files) {
     Check "$label 语法可解析" ($count -eq 0) $detail
 }
 
+# ---- 2.5 行为断言：启动器必须把调用方的代码页还原
+#       为什么需要它：编码/语法检查看不出"块内用 !VAR! 但没开延迟展开"这类语义错误——
+#       那一版所有静态检查全绿，而调用方被永久留在 65001（实测过，是真实回归）。
+#       做法：在子 cmd 里切到目标代码页 → 跑一次 -DryRun → 再读代码页，必须还是目标值。
+$launcher = Join-Path $RepoRoot "打开Unity工程.bat"
+if ((Test-Path -LiteralPath $launcher) -and (Get-Command cmd.exe -ErrorAction SilentlyContinue)) {
+    $probe = (& cmd /c "chcp" 2>&1) -join ' '
+    $current = 0
+    if ($probe -match '(\d+)\s*$') { $current = [int]$Matches[1] }
+    $target = if ($current -eq 437) { 850 } else { 437 }   # 选一个与当前不同的，避免测试本身是空转
+    $cmdLine = "chcp $target >nul & call `"$launcher`" -DryRun < nul >nul & chcp"
+    $out = (& cmd /c $cmdLine 2>&1) -join ' '
+    $restored = $out -match "$target\s*$"
+    Check "启动器还原调用方代码页（$target）" $restored "跑完后代码页不是 $target：$($out.Trim())（块内用 !VAR! 但未开延迟展开是最常见原因）"
+}
 # ---- 3. .gitattributes 是否仍然约束 *.bat 为 CRLF
 $attr = Join-Path $RepoRoot ".gitattributes"
 if (Test-Path -LiteralPath $attr) {
