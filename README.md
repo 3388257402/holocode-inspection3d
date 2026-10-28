@@ -123,12 +123,16 @@ npm run dev          # 默认 http://localhost:5173
 ### Unity 编译验证（实测记录）
 
 ```
-Unity 2022.3.62f1  -batchmode -quit -nographics -projectPath unity\Inspection3D
-退出码 0
-error CS   : 0 个
-warning CS : 0 个
+本机编辑器：Unity 2022.3.62f1c1（中国版渠道，Unity.exe 产品版本 2022.3.62f1c1_b0109b07edb8）
+命令：Unity.exe -batchmode -quit -nographics -projectPath unity\Inspection3D
+退出码 0 ｜ error CS 0 个 ｜ warning CS 0 个
 Assembly-CSharp.dll 24.5 KB,15:42:12 生成
 ```
+
+> **关于版本钉**：工程里的 `ProjectSettings/ProjectVersion.txt` 钉的是**国际版**
+> `2022.3.62f1 (4af31df58517)`，这样评审用任意 2022.3 LTS 打开都不会被判版本不符。
+> 本机装的是中国版 `2022.3.62f1c1`，Unity 打开工程时会把这个文件改写成本机版本号 ——
+> **这是 Unity 的正常行为，不是工程配置错误**；提交前若看到它变了，`git checkout` 还原即可。
 
 并且核对了编译产物里**确实包含**这六个类（不是"编译了个空程序集"）：
 

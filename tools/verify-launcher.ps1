@@ -104,7 +104,7 @@ foreach ($ps1 in $ps1Files) {
     $label = $ps1.Name
     $bytes = [System.IO.File]::ReadAllBytes($ps1.FullName)
     $hasBom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
-    Check "$label 带 UTF-8 BOM" $hasBom "缺 BOM → PS 5.1 按 GBK 读中文，可能连带吃掉引号导致解析失败"
+    Check "$label 带 UTF-8 BOM" $hasBom "缺 BOM → PS 5.1 按 GBK 读中文会解析失败。修：powershell -ExecutionPolicy Bypass -File tools\\fix-bom.ps1"
 
     $parseErrors = $null
     $null = [System.Management.Automation.Language.Parser]::ParseFile($ps1.FullName, [ref]$null, [ref]$parseErrors)
@@ -172,8 +172,9 @@ else {
                 $warned = ($out2 -match 'system default')
                 $restored2 = ($out2Cp -eq $target)
                 # 只接受两种组合：静默且还原到 $target，或明确 WARN（此时按系统默认页还原）。
-                # 用 or 把"WARN 了但没还原"也算通过，是上一版被审查点出的掩盖。
-                Check "兜底分支：不静默换页（要么还原 $target，要么打出 system default 提示）" ($restored2 -or $warned) "还原到 $out2Cp、WARN=$warned：$($out2.Trim())"
+                # 注意：单纯 `$restored2 -or $warned` 会让"WARN 了但根本没读到页"也算通过（$out2Cp=-1），
+# 所以要求 warned 分支下 $out2Cp -gt 0 —— 那才证明"确实按某个页还原过"。
+                Check "兜底分支：不静默换页（要么还原 $target，要么打出 system default 提示）" (($restored2 -and -not $warned) -or ($warned -and $out2Cp -gt 0)) "还原到 $out2Cp、WARN=$warned（WARN 但读不到任何可用页也算失败）：$($out2.Trim())"
             }
             finally {
                 Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue

@@ -40,31 +40,57 @@ function Resolve-Adb {
 }
 
 # Invoke-Adb 通过临时文件拿输出，避免上面说的管道继承导致卡死。
-# 返回 stdout 文本；超时返回 $null，让调用方能区分"没输出"和"跑不动"。
+# 返回 stdout 文本；失败/超时返回 $null，具体原因记在 $script:LastAdbFailure（timeout | exit-code），
+# 调用方用 Format-AdbFailure 给出对应建议 —— 两种失败的排查方向完全不同，不能混说。
 function Invoke-Adb {
   param([string]$AdbPath, [string[]]$AdbArgs, [int]$TimeoutMs = 20000)
   $out = [System.IO.Path]::GetTempFileName()
   $err = "$out.err"
+  $script:LastAdbFailure = $null
+  $script:LastAdbStderr = ""
   try {
     $p = Start-Process -FilePath $AdbPath -ArgumentList $AdbArgs -NoNewWindow -PassThru `
       -RedirectStandardOutput $out -RedirectStandardError $err
+
+    # 【必须在 WaitForExit 之前取一次 Handle】
+    # PS 5.1 的 `Start-Process -PassThru` 返回对象上，ExitCode 在 WaitForExit() 之后
+    # **仍可能是 $null**（实测：子进程 exit 3 也读不到；Refresh()/Get-Process 都无效）。
+    # 而访问一次 `$p.Handle` 会强制进程对象真正拿到句柄，之后 ExitCode 才可读（实测可读到 3）。
+    # 没有这一行，下面的退出码判断就是死代码。
+    $null = $p.Handle
+
     if (-not $p.WaitForExit($TimeoutMs)) {
       try { $p.Kill() } catch {}
+      $script:LastAdbFailure = "timeout"
       return $null
     }
-    # adb 退出码非 0 时，stdout 往往是空（错误信息在 stderr）。旧代码直接把空串返回，
-    # 调用方于是把"adb 调用失败"读成"三个包都不存在" → 误报"手机不支持 ARCore"、
-    # 建议换题/借手机。这里把失败转成 $null（与"超时"同义），让调用方走"无法判定"分支。
-    #
-    # 必须先判 $null：PS 5.1 里 `Start-Process -PassThru` 返回对象上的 ExitCode 可能是
-    # $null（实测：即使 WaitForExit() 之后仍为 null），而 `$null -ne 0` 恒为真 ——
-    # 直接写 `if ($p.ExitCode -ne 0)` 会把**每一次成功调用**都判成失败。
+
+    # adb 退出码非 0 时 stdout 往往是空（错误信息在 stderr）。旧代码直接把空串返回，
+    # 调用方于是把"adb 调用失败"读成"三个包都不存在" → 误报"手机不支持 ARCore"。
+    # 现在把失败与超时**分开记**：都是 $null，但 $script:LastAdbFailure 区分
+    # 'timeout' 与 'exit-code'，调用方据此给不同提示（别再统一说"超时"）。
     if ($null -ne $p.ExitCode -and $p.ExitCode -ne 0) {
+      $script:LastAdbFailure = "exit-code"
+      $script:LastAdbStderr = (Get-Content $err -Raw -ErrorAction SilentlyContinue)
+      if ($script:LastAdbStderr) { $script:LastAdbStderr = $script:LastAdbStderr.Trim() }
       return $null
     }
     return (Get-Content $out -Raw -ErrorAction SilentlyContinue)
   } finally {
     Remove-Item $out, $err -ErrorAction SilentlyContinue
+  }
+}
+
+# 把"无法判定"的两种原因翻成人话：超时的建议和 exit-code 的建议完全不同，
+# 混在一起会把人指向 `adb kill-server`（对 offline/unauthorized 无效）。
+function Format-AdbFailure {
+  switch ($script:LastAdbFailure) {
+    "timeout"   { return "adb 调用超时（可能 adb server 卡住）。试：adb kill-server 后重跑。" }
+    "exit-code" {
+      $tail = if ($script:LastAdbStderr) { "；stderr: " + $script:LastAdbStderr } else { "" }
+      return "adb 调用失败（返回非 0）$tail。常见原因：设备 offline/未授权、adb 版本不匹配、USB 传输异常。"
+    }
+    default     { return "adb 无输出（原因未知）。" }
   }
 }
 
@@ -79,7 +105,7 @@ if (-not $adbPath -or -not (Test-Path $adbPath)) {
 # 把人引向换题/借手机，而真实原因是线没插或没授权。
 $devicesText = Invoke-Adb -AdbPath $adbPath -AdbArgs @("devices")
 if ($null -eq $devicesText) {
-  Write-Host "adb devices 超时（可能 adb server 卡住）。试：adb kill-server 后重跑。" -ForegroundColor Red
+  Write-Host (Format-AdbFailure) -ForegroundColor Red
   exit 3
 }
 $deviceLines = @($devicesText -split "`r?`n" | Where-Object { $_ -match "^(\S+)\s+(device|unauthorized|offline)$" })
@@ -109,7 +135,7 @@ $android = Get-Prop "ro.build.version.release"
 
 $packages = Invoke-Adb -AdbPath $adbPath -AdbArgs @("shell", "pm", "list", "packages")
 if ($null -eq $packages) {
-  Write-Host "读取已安装包超时。请先解锁手机屏幕再重跑。" -ForegroundColor Red
+  Write-Host ("读取已安装包失败：" + (Format-AdbFailure)) -ForegroundColor Red
   exit 3
 }
 $hasArCore = $packages -match "package:com\.google\.ar\.core"
