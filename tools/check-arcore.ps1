@@ -68,8 +68,18 @@ function Invoke-Adb {
     # adb 退出码非 0 时 stdout 往往是空（错误信息在 stderr）。旧代码直接把空串返回，
     # 调用方于是把"adb 调用失败"读成"三个包都不存在" → 误报"手机不支持 ARCore"。
     # 现在把失败与超时**分开记**：都是 $null，但 $script:LastAdbFailure 区分
-    # 'timeout' 与 'exit-code'，调用方据此给不同提示（别再统一说"超时"）。
-    if ($null -ne $p.ExitCode -and $p.ExitCode -ne 0) {
+    # 'timeout' / 'exit-code' / 'unknown'，调用方据此给不同提示（别再统一说"超时"）。
+    #
+    # 先判"读不到退出码"：取 Handle 是**有竞态**的 —— 如果 adb 在我们访问 Handle 之前
+    # 就已经退出，ExitCode 依旧是 $null（实测过这条路径）。那时若 stdout 非空而实际退出码
+    # 非 0，就会被当成成功。所以读不到就归为 unknown，走"无法判定"，绝不当成功。
+    if ($null -eq $p.ExitCode) {
+      $script:LastAdbFailure = "unknown"
+      $script:LastAdbStderr = (Get-Content $err -Raw -ErrorAction SilentlyContinue)
+      if ($script:LastAdbStderr) { $script:LastAdbStderr = $script:LastAdbStderr.Trim() }
+      return $null
+    }
+    if ($p.ExitCode -ne 0) {
       $script:LastAdbFailure = "exit-code"
       $script:LastAdbStderr = (Get-Content $err -Raw -ErrorAction SilentlyContinue)
       if ($script:LastAdbStderr) { $script:LastAdbStderr = $script:LastAdbStderr.Trim() }
@@ -81,7 +91,7 @@ function Invoke-Adb {
   }
 }
 
-# 把"无法判定"的两种原因翻成人话：超时的建议和 exit-code 的建议完全不同，
+# 把"无法判定"的三种原因翻成人话：超时、非 0 退出、读不到退出码的排查方向完全不同，
 # 混在一起会把人指向 `adb kill-server`（对 offline/unauthorized 无效）。
 function Format-AdbFailure {
   switch ($script:LastAdbFailure) {
@@ -89,6 +99,10 @@ function Format-AdbFailure {
     "exit-code" {
       $tail = if ($script:LastAdbStderr) { "；stderr: " + $script:LastAdbStderr } else { "" }
       return "adb 调用失败（返回非 0）$tail。常见原因：设备 offline/未授权、adb 版本不匹配、USB 传输异常。"
+    }
+    "unknown"   {
+      $tail = if ($script:LastAdbStderr) { "；stderr: " + $script:LastAdbStderr } else { "" }
+      return "adb 读不到退出码（进程已提前退出）$tail。按无法判定处理 —— 不要据此判断手机是否支持 ARCore。"
     }
     default     { return "adb 无输出（原因未知）。" }
   }
