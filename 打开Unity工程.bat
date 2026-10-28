@@ -40,11 +40,19 @@ set "CPFROMFALLBACK="
 set "OEMCP="
 for /f "tokens=2 delims=:" %%C in ('chcp') do set "CPPRIMARY=%%C"
 if defined CPPRIMARY set "CPPRIMARY=%CPPRIMARY: =%"
+REM Strip the trailing dot some locales print ("Active code page: 850.") BEFORE validating,
+REM so the primary path still yields the REAL page instead of falling back to OEMCP.
+if defined CPPRIMARY for /f "delims=." %%D in ("%CPPRIMARY%") do set "CPPRIMARY=%%D"
 set "OLDCP=%CPPRIMARY%"
+set "CPOK="
 if defined OLDCP echo %OLDCP%| findstr /r /c:"^[0-9][0-9]*$" >nul || set "OLDCP="
+if defined OLDCP set "CPOK=1"
 if not defined OLDCP for /f "tokens=3" %%R in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Nls\CodePage" /v OEMCP 2^>nul') do set "OEMCP=%%R"
 if not defined OLDCP if defined OEMCP echo %OEMCP%| findstr /r /c:"^[0-9][0-9]*$" >nul && set "OLDCP=%OEMCP%"
-if not defined CPPRIMARY if defined OLDCP set "CPFROMFALLBACK=1"
+REM Flag the fallback by "did the PRIMARY path produce a usable value", not by
+REM "is CPPRIMARY defined": on a dot-locale CPPRIMARY is defined but unusable, and
+REM that used to skip the WARN while still switching the caller to the OEM page.
+if not defined CPOK if defined OLDCP set "CPFROMFALLBACK=1"
 chcp 65001 >nul
 
 if not exist "%~dp0scripts\open-unity.ps1" (
@@ -90,9 +98,6 @@ if defined OLDCP if defined CPFROMFALLBACK (
 if not defined OLDCP (
   echo [WARN] Could not read the caller's code page; this window may stay on 65001.
 )
-if defined OLDCP (
-  for /f "delims=." %%A in ("%OLDCP%") do (
-    echo %%A| findstr /r /c:"^[0-9][0-9]*$" >nul && chcp %%A >nul
-  )
-)
+REM OLDCP is digits-only by now (validated above), so no further parsing is needed.
+if defined OLDCP chcp %OLDCP% >nul
 exit /b %RC%

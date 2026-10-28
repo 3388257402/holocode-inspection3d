@@ -130,7 +130,7 @@ elseif (-not (Get-Command cmd.exe -ErrorAction SilentlyContinue)) {
 else {
     $probe = (& cmd /c "chcp" 2>&1) -join ' '
     $current = $null
-    if ($probe -match '(\d+)\D*$') { $current = [int]$Matches[1] }
+    $probeTail = (('' + $probe) -replace '\.\s*\r?\n?\s*$','').TrimEnd(); if ($probeTail -match '(\d+)\s*$') { $current = [int]$Matches[1] }
 
     if ($null -eq $current) {
         # 解析失败时不能默认 0 继续跑：那会让 $target 恒为 437，若本机本来就是 437，
@@ -143,8 +143,9 @@ else {
             $cmdLine = "chcp $target >nul & call `"$launcher`" -DryRun < nul & chcp"
             $out = (& cmd /c $cmdLine 2>&1) -join ' '
             # 主路径：应静默还原成 $target
-            Check "启动器还原调用方代码页（$target）" ($out -match "$target\D*$") "跑完后代码页不是 $target：$($out.Trim())"
-
+            # 用整数比较，而不是正则子串：`..437..` 这种正文里出现数字不算还原成功
+            $outTail = ([string]$out) -replace '\.\s*$', ''
+            $outCp = if ($outTail -match '(\d+)\s*$') { [int]$Matches[1] } else { -1 }
             # 兜底路径：把主解析行删掉，强制走 OEMCP 分支。
             # 可接受两种结果：仍还原成 $target，或明确打出"system default"的 WARN。
             # 不可接受的是"静默换成别的页"——那正是这条断言要拦的。
@@ -154,12 +155,16 @@ else {
                 $copy = Join-Path $tmpDir "launcher.bat"
                 $body = Get-Content -LiteralPath $launcher -Raw
                 # 去掉主解析（for /f ... delims=: ... chcp）与 OEMCP 兜底的依赖，只留兜底
+                $bodyBefore = $body
                 $body = $body -replace '(?m)^for /f "tokens=2 delims=:" %%C in \(''chcp''\) do set "CPPRIMARY=%%C"\r?\n', ''
                 $body = $body -replace '(?m)^if defined CPPRIMARY set "CPPRIMARY=%CPPRIMARY: =%"\r?\n', ''
+                Check "兜底副本确实删掉了主解析行" ($body -ne $bodyBefore) "替换模式与源码不匹配：兜底断言会退化成再跑一遍主路径（静默空转）"
                 Set-Content -LiteralPath $copy -Value $body -Encoding ASCII -NoNewline
                 $cmdLine2 = "chcp $target >nul & call `"$copy`" -DryRun < nul & chcp"
                 $out2 = (& cmd /c $cmdLine2 2>&1) -join ' '
-                $ok2 = ($out2 -match "$target\D*$") -or ($out2 -match 'system default')
+                $out2Tail = (('' + $out2) -replace '\.\s*$','').TrimEnd()
+                $out2Cp = if ($out2Tail -match '(\d+)\s*$') { [int]$Matches[1] } else { -1 }
+                $ok2 = ($out2Cp -eq $target) -or ($out2 -match 'system default')
                 Check "兜底分支：不静默换页（要么还原 $target，要么打出 system default 提示）" $ok2 $out2.Trim()
             }
             finally {
