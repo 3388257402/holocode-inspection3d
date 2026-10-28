@@ -17,24 +17,34 @@ REM      NOT undone by setlocal, so a caller sitting in a cmd window would
 REM      otherwise be left on 65001)
 REM ============================================================================
 setlocal
-REM Read the caller's code page. `chcp` output is LOCALIZED ("Active code page: 936"
-REM vs the localized Chinese form), so parsing by "tokens=2 delims=:" assumes the text has a
-REM colon. If a locale prints something else, OLDCP stays empty and the restore block
-REM is skipped -- exactly the silent regression this file was fixed for once already.
-for /f "tokens=2 delims=:" %%C in ('chcp') do set "OLDCP=%%C"
-if defined OLDCP set "OLDCP=%OLDCP: =%"
-REM Fallback that does NOT depend on localized text. Two things that are easy to get
-REM wrong here (both measured):
-REM   1. The console code page is the OEM code page, not the ANSI one. On a Western
-REM      locale ACP=1252 while the console is 65001/850 -- restoring ACP would pick a
-REM      page the console never had. So read OEMCP.
+REM ---- Read the caller's console code page ---------------------------------------
+REM `chcp` output is LOCALIZED, so parsing by "tokens=2 delims=:" assumes an ASCII colon.
+REM If a locale prints something else (or bars a trailing dot), the primary parse fails and
+REM we fall back to the registry OEM code page.
+REM
+REM Three things that are easy to get wrong here (all measured):
+REM   1. The console page is the OEM page, not the ANSI one. On a Western locale
+REM      ACP=1252 while the console is 850 / 65001 -- restoring ACP picks a page the
+REM      console never had. So read OEMCP.
 REM   2. `reg query` prints it DECIMAL ("OEMCP  REG_SZ  936"); there is no 0x prefix.
-REM   3. The parse must live OUTSIDE any parenthesised block: %VAR% is expanded when
-REM      the block is parsed, so a value assigned inside the same block is still empty
-REM      there (measured: OLDCP stayed empty while the variable did get set).
+REM   3. Every assignment stays OUTSIDE parenthesised blocks: %VAR% is expanded when a
+REM      block is parsed, so a value assigned inside the same block is still empty there
+REM      (measured: OLDCP stayed empty while the variable itself did get set).
+REM
+REM "Is this value usable?" is decided in ONE place (the digit checks below), so the
+REM restore step and the warnings at :finish cannot disagree. Before, a defined-but-
+REM unusable OLDCP was a silent exit: no restore and no warning at all.
+set "OLDCP="
+set "CPPRIMARY="
+set "CPFROMFALLBACK="
 set "OEMCP="
+for /f "tokens=2 delims=:" %%C in ('chcp') do set "CPPRIMARY=%%C"
+if defined CPPRIMARY set "CPPRIMARY=%CPPRIMARY: =%"
+set "OLDCP=%CPPRIMARY%"
+if defined OLDCP echo %OLDCP%| findstr /r /c:"^[0-9][0-9]*$" >nul || set "OLDCP="
 if not defined OLDCP for /f "tokens=3" %%R in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Nls\CodePage" /v OEMCP 2^>nul') do set "OEMCP=%%R"
-if not defined OLDCP if defined OEMCP set "OLDCP=%OEMCP%"
+if not defined OLDCP if defined OEMCP echo %OEMCP%| findstr /r /c:"^[0-9][0-9]*$" >nul && set "OLDCP=%OEMCP%"
+if not defined CPPRIMARY if defined OLDCP set "CPFROMFALLBACK=1"
 chcp 65001 >nul
 
 if not exist "%~dp0scripts\open-unity.ps1" (
@@ -66,15 +76,23 @@ REM Use %%A directly instead of a !VAR! temp: this file does NOT enable delayed
 REM expansion (deliberately - see top of file: !VAR! would eat "!" inside %* paths),
 REM and under normal expansion "!CP!" stays literal, so findstr never matches and the
 REM restore is skipped silently. That regression was measured (caller stayed on 65001).
+REM Restore LAST (see note above) and say which path was taken:
+REM   - primary parse worked -> silent restore (the normal case)
+REM   - fell back to OEMCP   -> visible WARN: the caller may end up on the system
+REM     default page instead of the page it actually started on. Saying it out loud
+REM     matters, because otherwise the user's terminal silently changes behaviour.
+REM   - nothing readable     -> visible WARN: may stay on 65001.
+if defined OLDCP if defined CPFROMFALLBACK (
+  REM Also fix the stale reason in the header: OEMCP is NOT necessarily the page the
+  REM caller had either, so the honest wording is "system default", not "the caller's page".
+  echo [WARN] Caller code page unknown; restoring the system default %OLDCP%.
+)
+if not defined OLDCP (
+  echo [WARN] Could not read the caller's code page; this window may stay on 65001.
+)
 if defined OLDCP (
   for /f "delims=." %%A in ("%OLDCP%") do (
     echo %%A| findstr /r /c:"^[0-9][0-9]*$" >nul && chcp %%A >nul
   )
-)
-if not defined OLDCP (
-  REM Turn the silent case into a visible one: if neither `chcp` parsing nor the
-  REM registry fallback produced a code page, the caller may be left on 65001 and
-  REM later GBK output will look garbled. Saying so beats failing silently.
-  echo [WARN] Could not read the caller's code page; this window may stay on 65001.
 )
 exit /b %RC%

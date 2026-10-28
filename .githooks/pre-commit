@@ -40,7 +40,10 @@ fi
 # pathspec 只依赖 git 本身，且顺带解决了中文文件名被 quotepath 转义后匹配不上的问题。
 # 必须把 '.githooks/*' 也算进来：检查器里有两项是专门查 hook 自身的（全 LF / 有 shebang），
 # 如果改 hook 的这次提交不触发检查，那两项就永远看不到自己（实测过：只改 hook 时 CHANGED 为空）。
-CHANGED="$(git -c core.quotepath=false diff --cached --name-only -- '*.bat' '*.cmd' '*.ps1' '.gitattributes' '.githooks/*' 2>/dev/null)"
+if ! CHANGED="$(git -c core.quotepath=false diff --cached --name-only -- '*.bat' '*.cmd' '*.ps1' '.gitattributes' '.githooks/*' '*.new' '*.bak' '*.orig')"; then
+    echo "[pre-commit] git diff 失败，拒绝在未检查的情况下放行" >&2
+    exit 1
+fi
 if [ -n "$CHANGED" ]; then
     echo "[pre-commit] 检查启动脚本维护规则（针对索引内容）..."
 

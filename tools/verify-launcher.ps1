@@ -73,6 +73,15 @@ foreach ($bat in $batFiles) {
     Check "$label 无 BOM" (-not $hasBom) "cmd 会把 BOM 当成命令字符"
 }
 
+# ---- 1.5 启动器必须真的切到 UTF-8（静态 + 目的说明）
+#       为什么：§2.5 只验证"退出时还原"，删掉 `chcp 65001` 那行它照样全绿（实测过），
+#       而那一行是整个中文输出正确的前提。所以单独断言它存在。
+$launcherPath = Join-Path $RepoRoot "打开Unity工程.bat"
+if (Test-Path -LiteralPath $launcherPath) {
+    $lb = [System.IO.File]::ReadAllText($launcherPath)
+    $hasUtf8 = ([regex]::IsMatch($lb, '(?m)^chcp\s+65001\b'))
+    Check "启动器设置了 UTF-8 代码页（chcp 65001）" $hasUtf8 "缺这行时 PowerShell 的中文输出会按调用方码页编码，重定向/CI 下会乱码"
+}
 # ---- 2. 所有 .ps1：UTF-8 with BOM + 语法可解析
 #     为什么遍历而不是只查一个文件名：上一版只认 scripts\open-unity.ps1，
 #     于是一个无 BOM 的 tools\extra.ps1（或改名后的副本）能让检查器 8 项全绿 ——
@@ -103,33 +112,64 @@ foreach ($ps1 in $ps1Files) {
 }
 
 # ---- 2.5 行为断言：启动器必须把调用方的代码页还原
-#       为什么需要它：编码/语法检查看不出"块内用 !VAR! 但没开延迟展开"这类语义错误——
-#       那一版所有静态检查全绿，而调用方被永久留在 65001（实测过，是真实回归）。
-#       做法：在子 cmd 里切到目标代码页 → 跑一次 -DryRun → 再读代码页，必须还是目标值。
+#       编码/语法检查看不出"块内用 !VAR! 但没开延迟展开"这类语义错误：那一版静态检查全绿，
+#       而调用方被永久留在 65001（实测过）。所以这里真起子 cmd 跑一遍。
+#
+#       两点是自己踩过才加的：
+#       a) 本检查器自己也会把**当前控制台**切到 $target，必须 try/finally 还原 ——
+#          它被 pre-commit 调用，否则每次 git commit 都会把用户的终端留在 437。
+#       b) 兜底分支（chcp 读不出 → 用 OEMCP 猜）在主路径正常时永远跑不到，所以要另造
+#          一个"删掉主解析"的副本单独断言，否则那条分支坏了也全绿。
 $launcher = Join-Path $RepoRoot "打开Unity工程.bat"
 if (-not (Test-Path -LiteralPath $launcher)) {
     # §1 已断言"具名启动器存在"，这里不重复失败
 }
 elseif (-not (Get-Command cmd.exe -ErrorAction SilentlyContinue)) {
-    # 原来这里是静默跳过：cmd 不可用时整段断言不产生任何 Check，检查器照样打印"全部通过"，
-    # 等于行为门禁在那种机器上悄悄消失。按 fail-closed 策略显式记失败。
     Check "cmd.exe 可用（代码页行为断言的前提）" $false "找不到 cmd.exe，无法验证启动器是否还原代码页"
 }
 else {
     $probe = (& cmd /c "chcp" 2>&1) -join ' '
     $current = $null
-    if ($probe -match '(\d+)\s*$') { $current = [int]$Matches[1] }
+    if ($probe -match '(\d+)\D*$') { $current = [int]$Matches[1] }
 
     if ($null -eq $current) {
         # 解析失败时不能默认 0 继续跑：那会让 $target 恒为 437，若本机本来就是 437，
-        # 断言就成了空转（测试永远绿，而启动器坏着也看不出来）。
+        # 断言就成了空转（永远绿，启动器坏着也看不出来）。
         Check "能读到当前代码页" $false "chcp 输出无法解析：$probe"
-    } else {
+    }
+    else {
         $target = if ($current -eq 437) { 850 } else { 437 }   # 故意选与当前不同的，避免空转
-        $cmdLine = "chcp $target >nul & call `"$launcher`" -DryRun < nul >nul & chcp"
-        $out = (& cmd /c $cmdLine 2>&1) -join ' '
-        $restored = $out -match "$target\s*$"
-        Check "启动器还原调用方代码页（$target）" $restored "跑完后代码页不是 $target：$($out.Trim())（块内用 !VAR! 但未开延迟展开是最常见原因）"
+        try {
+            $cmdLine = "chcp $target >nul & call `"$launcher`" -DryRun < nul & chcp"
+            $out = (& cmd /c $cmdLine 2>&1) -join ' '
+            # 主路径：应静默还原成 $target
+            Check "启动器还原调用方代码页（$target）" ($out -match "$target\D*$") "跑完后代码页不是 $target：$($out.Trim())"
+
+            # 兜底路径：把主解析行删掉，强制走 OEMCP 分支。
+            # 可接受两种结果：仍还原成 $target，或明确打出"system default"的 WARN。
+            # 不可接受的是"静默换成别的页"——那正是这条断言要拦的。
+            $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ("cp-fallback-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+            New-Item -ItemType Directory -Force $tmpDir | Out-Null
+            try {
+                $copy = Join-Path $tmpDir "launcher.bat"
+                $body = Get-Content -LiteralPath $launcher -Raw
+                # 去掉主解析（for /f ... delims=: ... chcp）与 OEMCP 兜底的依赖，只留兜底
+                $body = $body -replace '(?m)^for /f "tokens=2 delims=:" %%C in \(''chcp''\) do set "CPPRIMARY=%%C"\r?\n', ''
+                $body = $body -replace '(?m)^if defined CPPRIMARY set "CPPRIMARY=%CPPRIMARY: =%"\r?\n', ''
+                Set-Content -LiteralPath $copy -Value $body -Encoding ASCII -NoNewline
+                $cmdLine2 = "chcp $target >nul & call `"$copy`" -DryRun < nul & chcp"
+                $out2 = (& cmd /c $cmdLine2 2>&1) -join ' '
+                $ok2 = ($out2 -match "$target\D*$") -or ($out2 -match 'system default')
+                Check "兜底分支：不静默换页（要么还原 $target，要么打出 system default 提示）" $ok2 $out2.Trim()
+            }
+            finally {
+                Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+        finally {
+            # 无论断言成败都还原本检查器改过的控制台码页
+            & cmd /c "chcp $current >nul" | Out-Null
+        }
     }
 }
 # ---- 2.6 git hook 的形态：存在 + 全 LF
