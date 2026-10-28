@@ -17,8 +17,18 @@ REM      NOT undone by setlocal, so a caller sitting in a cmd window would
 REM      otherwise be left on 65001)
 REM ============================================================================
 setlocal
+REM Read the caller's code page. `chcp` output is LOCALIZED ("Active code page: 936"
+REM vs the localized Chinese form), so parsing by "tokens=2 delims=:" assumes the text has a
+REM colon. If a locale prints something else, OLDCP stays empty and the restore block
+REM is skipped -- exactly the silent regression this file was fixed for once already.
 for /f "tokens=2 delims=:" %%C in ('chcp') do set "OLDCP=%%C"
 if defined OLDCP set "OLDCP=%OLDCP: =%"
+REM Fallback that does NOT depend on localized text: the ANSI code page lives in the
+REM registry as hex. `set /a` converts 0x3A8 -> 936.
+if not defined OLDCP (
+  for /f "tokens=3" %%R in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Nls\CodePage" /v ACP 2^>nul') do set "ACPHEX=%%R"
+  if defined ACPHEX set /a OLDCP=0x%ACPHEX% >nul 2>&1
+)
 chcp 65001 >nul
 
 if not exist "%~dp0scripts\open-unity.ps1" (
@@ -54,5 +64,11 @@ if defined OLDCP (
   for /f "delims=." %%A in ("%OLDCP%") do (
     echo %%A| findstr /r /c:"^[0-9][0-9]*$" >nul && chcp %%A >nul
   )
+)
+if not defined OLDCP (
+  REM Turn the silent case into a visible one: if neither `chcp` parsing nor the
+  REM registry fallback produced a code page, the caller may be left on 65001 and
+  REM later GBK output will look garbled. Saying so beats failing silently.
+  echo [WARN] Could not read the caller's code page; this window may stay on 65001.
 )
 exit /b %RC%

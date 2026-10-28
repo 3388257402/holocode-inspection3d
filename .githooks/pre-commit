@@ -13,17 +13,16 @@
 #
 # 逃生口：git commit --no-verify
 
-# 前提工具缺失时必须 fail-closed：实测过 PATH 里没有 grep 时脚本直接 exit 0、
+# 前提工具缺失时必须 fail-closed：实测过缺工具时脚本会静默放行、
 # 没有 git 时 REPO_ROOT 变空 -> 拼出 /tools/verify-launcher.ps1 -> "文件不存在" -> 跳过检查。
 # 这两种都会把"工具缺失"伪装成"检查通过"，比没有 hook 更危险。
 command -v git  >/dev/null 2>&1 || { echo "[pre-commit] 找不到 git，拒绝在未检查的情况下放行" >&2; exit 1; }
-command -v grep >/dev/null 2>&1 || { echo "[pre-commit] 找不到 grep，拒绝在未检查的情况下放行" >&2; exit 1; }
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 CHECKER="$REPO_ROOT/tools/verify-launcher.ps1"
 
 # 检查器缺失必须 fail-closed：删掉/改名它就等于静默关掉门禁，
-# 而上面"缺 git/grep 就 exit 1"已经定了同一策略，这里不该例外。
+# 而上面"缺 git 就 exit 1"已经定了同一策略，这里不该例外。
 if [ ! -f "$CHECKER" ]; then
     echo "[pre-commit] 找不到 $CHECKER —— 拒绝在未检查的情况下放行" >&2
     echo "             恢复该文件，或临时用 git commit --no-verify 跳过。" >&2
@@ -35,7 +34,12 @@ fi
 # 必须加 `-c core.quotepath=false`：git 默认会把非 ASCII 文件名输出成
 # "\346\211\223..."（带引号、八进制转义），于是 `\.bat$` 永远匹配不上
 # —— 中文名的启动脚本就会被静默跳过检查（实测过：弄坏 .bat 后提交照样成功）。
-if git -c core.quotepath=false diff --cached --name-only | grep -Eq '\.(bat|cmd|ps1|gitattributes)$'; then
+# 用 git 自己的 pathspec 判断有没有相关文件，而不是 `| grep`：
+# Windows 上 Git 通常只把 `Git\cmd` 加进 PATH（没有 usr\bin），hook 由 sh 执行、PATH 原样继承，
+# 于是 `grep` 在那种机器上不存在 —— 而这条 hard-fail 会让每次提交都被拦死。
+# pathspec 只依赖 git 本身，且顺带解决了中文文件名被 quotepath 转义后匹配不上的问题。
+CHANGED="$(git -c core.quotepath=false diff --cached --name-only -- '*.bat' '*.cmd' '*.ps1' '.gitattributes' 2>/dev/null)"
+if [ -n "$CHANGED" ]; then
     echo "[pre-commit] 检查启动脚本维护规则（针对索引内容）..."
 
     MIRROR="${TMPDIR:-/tmp}/holocode-precommit.$$"

@@ -107,15 +107,30 @@ foreach ($ps1 in $ps1Files) {
 #       那一版所有静态检查全绿，而调用方被永久留在 65001（实测过，是真实回归）。
 #       做法：在子 cmd 里切到目标代码页 → 跑一次 -DryRun → 再读代码页，必须还是目标值。
 $launcher = Join-Path $RepoRoot "打开Unity工程.bat"
-if ((Test-Path -LiteralPath $launcher) -and (Get-Command cmd.exe -ErrorAction SilentlyContinue)) {
+if (-not (Test-Path -LiteralPath $launcher)) {
+    # §1 已断言"具名启动器存在"，这里不重复失败
+}
+elseif (-not (Get-Command cmd.exe -ErrorAction SilentlyContinue)) {
+    # 原来这里是静默跳过：cmd 不可用时整段断言不产生任何 Check，检查器照样打印"全部通过"，
+    # 等于行为门禁在那种机器上悄悄消失。按 fail-closed 策略显式记失败。
+    Check "cmd.exe 可用（代码页行为断言的前提）" $false "找不到 cmd.exe，无法验证启动器是否还原代码页"
+}
+else {
     $probe = (& cmd /c "chcp" 2>&1) -join ' '
-    $current = 0
+    $current = $null
     if ($probe -match '(\d+)\s*$') { $current = [int]$Matches[1] }
-    $target = if ($current -eq 437) { 850 } else { 437 }   # 选一个与当前不同的，避免测试本身是空转
-    $cmdLine = "chcp $target >nul & call `"$launcher`" -DryRun < nul >nul & chcp"
-    $out = (& cmd /c $cmdLine 2>&1) -join ' '
-    $restored = $out -match "$target\s*$"
-    Check "启动器还原调用方代码页（$target）" $restored "跑完后代码页不是 $target：$($out.Trim())（块内用 !VAR! 但未开延迟展开是最常见原因）"
+
+    if ($null -eq $current) {
+        # 解析失败时不能默认 0 继续跑：那会让 $target 恒为 437，若本机本来就是 437，
+        # 断言就成了空转（测试永远绿，而启动器坏着也看不出来）。
+        Check "能读到当前代码页" $false "chcp 输出无法解析：$probe"
+    } else {
+        $target = if ($current -eq 437) { 850 } else { 437 }   # 故意选与当前不同的，避免空转
+        $cmdLine = "chcp $target >nul & call `"$launcher`" -DryRun < nul >nul & chcp"
+        $out = (& cmd /c $cmdLine 2>&1) -join ' '
+        $restored = $out -match "$target\s*$"
+        Check "启动器还原调用方代码页（$target）" $restored "跑完后代码页不是 $target：$($out.Trim())（块内用 !VAR! 但未开延迟展开是最常见原因）"
+    }
 }
 # ---- 2.6 git hook 的形态：存在 + 全 LF
 #       为什么查：core.autocrlf=true 的机器 checkout 成 CRLF 后，`#!/bin/sh` 会变成
