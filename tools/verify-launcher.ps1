@@ -112,7 +112,15 @@ foreach ($ps1 in $ps1Files) {
     # 它跑在临时导出的索引镜像上（-RepoRoot 指向 <TEMP>/holocode-precommit.<pid>）。
     # 若把 $ps1.FullName 的绝对路径写进提示，人照抄只会改镜像副本 —— 真仓库没变、下次提交照红，
     # 而且 hook 退出时 trap 已把镜像删掉，那条命令还会直接报"找不到文件"。
-    $relPath = $ps1.FullName.Substring($RepoRoot.Length).TrimStart('\', '/')
+    # 先判定 RepoRoot 真的是 FullName 的前缀，再取相对路径：
+    # 直接 Substring($RepoRoot.Length) 时，-RepoRoot 给比文件更长的串会抛
+    # MethodInvocationException（$ErrorActionPreference=Stop 下整轮检查中断）；
+    # 给短的非前缀根（如 G:\SN）则会静默算出错的相对路径写进提示。
+    $relPath = if ($ps1.FullName.StartsWith($RepoRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $ps1.FullName.Substring($RepoRoot.Length).TrimStart('\', '/')
+    } else {
+        $ps1.Name   # 兜底：至少给出文件名，不编一个错的相对路径
+    }
     # 自救命令必须**幂等**：已有 BOM 就不动，否则会拼出双 BOM。
     $selfFix = 'powershell -NoProfile -c "$p=''' + $relPath + ''';
         $b=[IO.File]::ReadAllBytes($p);
