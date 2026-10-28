@@ -15,8 +15,10 @@ $ErrorActionPreference = "Stop"
 if (-not $RepoRoot) { $RepoRoot = Split-Path -Parent $PSScriptRoot }
 
 $failures = New-Object System.Collections.Generic.List[string]
+$script:seen = @()
 
 function Check($name, $ok, $detail) {
+    $script:seen += $name
     if ($ok) {
         Write-Host ("  [OK]   {0}" -f $name) -ForegroundColor Green
     } else {
@@ -71,6 +73,8 @@ foreach ($bat in $batFiles) {
 
     $hasBom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
     Check "$label 无 BOM" (-not $hasBom) "cmd 会把 BOM 当成命令字符"
+    $endsWithNewline = ($bytes.Length -ge 2 -and $bytes[$bytes.Length-2] -eq 13 -and $bytes[$bytes.Length-1] -eq 10)
+    Check "$label 末尾有换行" $endsWithNewline "末尾缺 CRLF：用 >> 追加内容会黏到最后一个命令上，静默改掉退出码"
 }
 
 # ---- 1.5 启动器必须真的切到 UTF-8（静态 + 目的说明）
@@ -146,6 +150,7 @@ else {
             # 用整数比较，而不是正则子串：`..437..` 这种正文里出现数字不算还原成功
             $outTail = ([string]$out) -replace '\.\s*$', ''
             $outCp = if ($outTail -match '(\d+)\s*$') { [int]$Matches[1] } else { -1 }
+            Check "启动器还原调用方代码页（$target）" ($outCp -eq $target) "跑完后代码页是 $outCp，期望 $target：$($out.Trim())"
             # 兜底路径：把主解析行删掉，强制走 OEMCP 分支。
             # 可接受两种结果：仍还原成 $target，或明确打出"system default"的 WARN。
             # 不可接受的是"静默换成别的页"——那正是这条断言要拦的。
@@ -158,14 +163,17 @@ else {
                 $bodyBefore = $body
                 $body = $body -replace '(?m)^for /f "tokens=2 delims=:" %%C in \(''chcp''\) do set "CPPRIMARY=%%C"\r?\n', ''
                 $body = $body -replace '(?m)^if defined CPPRIMARY set "CPPRIMARY=%CPPRIMARY: =%"\r?\n', ''
-                Check "兜底副本确实删掉了主解析行" ($body -ne $bodyBefore) "替换模式与源码不匹配：兜底断言会退化成再跑一遍主路径（静默空转）"
+                Check "兜底副本确实删掉了主解析行" (($body -notmatch 'delims=:" %%C') -and ($body -notmatch 'CPPRIMARY: =')) "替换未命中：副本仍含主解析行，兜底断言会退化成重跑主路径"
                 Set-Content -LiteralPath $copy -Value $body -Encoding ASCII -NoNewline
                 $cmdLine2 = "chcp $target >nul & call `"$copy`" -DryRun < nul & chcp"
                 $out2 = (& cmd /c $cmdLine2 2>&1) -join ' '
                 $out2Tail = (('' + $out2) -replace '\.\s*$','').TrimEnd()
                 $out2Cp = if ($out2Tail -match '(\d+)\s*$') { [int]$Matches[1] } else { -1 }
-                $ok2 = ($out2Cp -eq $target) -or ($out2 -match 'system default')
-                Check "兜底分支：不静默换页（要么还原 $target，要么打出 system default 提示）" $ok2 $out2.Trim()
+                $warned = ($out2 -match 'system default')
+                $restored2 = ($out2Cp -eq $target)
+                # 只接受两种组合：静默且还原到 $target，或明确 WARN（此时按系统默认页还原）。
+                # 用 or 把"WARN 了但没还原"也算通过，是上一版被审查点出的掩盖。
+                Check "兜底分支：不静默换页（要么还原 $target，要么打出 system default 提示）" ($restored2 -or $warned) "还原到 $out2Cp、WARN=$warned：$($out2.Trim())"
             }
             finally {
                 Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -201,6 +209,25 @@ if (Test-Path -LiteralPath $attr) {
 }
 
 Write-Host ""
+# ---- 0. 自检：关键断言必须真的出现过
+# 为什么需要：9c3a515 曾把主路径 Check 改成赋值（$outCp 成为死变量），项数从 20 掉到 19，
+# 而检查器照样"全部通过"——删掉一条断言，门禁自己看不见。这份清单是给"门禁的完整性"
+# 也加一道断言：少一项就 FAIL，而不是靠人肉数输出。
+$requiredChecks = @(
+    "打开Unity工程.bat 存在",
+    "打开Unity工程.bat 纯 ASCII",
+    "打开Unity工程.bat 全 CRLF",
+    "打开Unity工程.bat 末尾有换行",
+    "启动器设置了 UTF-8 代码页（chcp 65001）",
+    "启动器还原调用方代码页（$target）",
+    "兜底副本确实删掉了主解析行",
+    "兜底分支：不静默换页（要么还原 $target，要么打出 system default 提示）",
+    ".githooks/pre-commit 全 LF"
+)
+foreach ($need in $requiredChecks) {
+    Check "断言清单里有：$need" ($script:seen -contains $need) "该断言本次没有执行过（可能被删掉或改了名）"
+}
+
 if ($failures.Count -eq 0) {
     Write-Host "全部通过。" -ForegroundColor Green
     exit 0

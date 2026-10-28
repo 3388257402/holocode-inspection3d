@@ -116,10 +116,26 @@ npm run dev          # 默认 http://localhost:5173
 
 | 项 | 说明 | 为什么这样 |
 |---|---|---|
-| **C# 未经 Unity 编译验证** | 本机虽已装好 Unity 2022.3.62f1，但 `Unity -batchmode` 需要先登录激活许可证（Personal 免费），登录这一步只能由使用者完成。在此之前 `Assets/Scripts/*.cs` 只做了静态检查（括号/引号配平、跨文件符号引用一致） | 如实说明；首次打开若报编译错，把报错原文贴过来即可修 |
-| Unity 许可证未激活 | 同上：没有许可证时编辑器无法启动，`batchmode` 报 `No ULF license found` | 登录一次即可，之后不再需要 |
+| **未验证的一步：Editor 里按 Play 的实际画面** | 编译已验证（见下），但"点 Play 之后场景是否真的生成、射线是否真的命中"必须由人在编辑器里点一次才能确认——无头模式跑不出画面 | 如实说明；这一步我没法替代，只能给操作步骤 |
 | 列表恢复标记 | 加分项：从后端拉问题列表并在场景里还原标记 | 必做功能里没有；先保证主干闭环 |
 | 点击标记查看详情 | 加分项 | 同上 |
+
+### Unity 编译验证（实测记录）
+
+```
+Unity 2022.3.62f1  -batchmode -quit -nographics -projectPath unity\Inspection3D
+退出码 0
+error CS   : 0 个
+warning CS : 0 个
+Assembly-CSharp.dll 24.5 KB,15:42:12 生成
+```
+
+并且核对了编译产物里**确实包含**这六个类（不是"编译了个空程序集"）：
+
+`InspectionSceneBootstrap` / `IssueFormUI` / `PlacementController` / `PlayerMover` / `IssueApiClient` / `ApiConfig`
+
+日志关键行：`Successfully updated license` → `DisplayProgressbar: Compiling Scripts`
+→ `Finished compiling graph: 116 nodes` → `Exiting batchmode successfully now!`
 
 ### 已知问题
 

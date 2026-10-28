@@ -52,6 +52,16 @@ function Invoke-Adb {
       try { $p.Kill() } catch {}
       return $null
     }
+    # adb 退出码非 0 时，stdout 往往是空（错误信息在 stderr）。旧代码直接把空串返回，
+    # 调用方于是把"adb 调用失败"读成"三个包都不存在" → 误报"手机不支持 ARCore"、
+    # 建议换题/借手机。这里把失败转成 $null（与"超时"同义），让调用方走"无法判定"分支。
+    #
+    # 必须先判 $null：PS 5.1 里 `Start-Process -PassThru` 返回对象上的 ExitCode 可能是
+    # $null（实测：即使 WaitForExit() 之后仍为 null），而 `$null -ne 0` 恒为真 ——
+    # 直接写 `if ($p.ExitCode -ne 0)` 会把**每一次成功调用**都判成失败。
+    if ($null -ne $p.ExitCode -and $p.ExitCode -ne 0) {
+      return $null
+    }
     return (Get-Content $out -Raw -ErrorAction SilentlyContinue)
   } finally {
     Remove-Item $out, $err -ErrorAction SilentlyContinue
