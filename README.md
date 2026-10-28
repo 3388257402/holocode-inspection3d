@@ -133,6 +133,8 @@ npm run dev          # 默认 http://localhost:5173
 
 ### 虚拟巡检场景（题目 3.1.1）
 
+![虚拟巡检现场](docs/scene-preview.png)
+
 场景文件：`unity/Inspection3D/Assets/Scenes/Inspection.unity`（已加入 Build Settings 首位）。
 
 打开方式：双击 `打开Unity工程.bat` → 在 Project 面板双击 `Assets/Scenes/Inspection.unity`。
