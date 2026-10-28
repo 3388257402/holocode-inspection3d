@@ -37,6 +37,20 @@ foreach ($f in $targets) {
     # 否则"前面的已补、后面的没补"，而人以为跑完了。
     try {
         $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
+
+        # UTF-16（记事本存成 "Unicode"）开头是 FF FE / FE FF —— 它**已经有** BOM，
+        # 只是不是 UTF-8 的。不先拦住，下面会把它当"缺 BOM"并在最前面插 EF BB BF，
+        # 于是 PS 5.1 拿 UTF-8 去解 UTF-16 的字节，文件立刻变乱码。这个工具是写盘的，
+        # 这种边界必须守：认出来就跳过，交给人转编码。
+        $isUtf16 = ($bytes.Length -ge 2) -and (
+            (($bytes[0] -eq 0xFF) -and ($bytes[1] -eq 0xFE)) -or
+            (($bytes[0] -eq 0xFE) -and ($bytes[1] -eq 0xFF)))
+        if ($isUtf16) {
+            Write-Host ("  跳过（UTF-16 编码，需人工转成 UTF-8）: " + $f.Name) -ForegroundColor Red
+            $failed += ($f.Name + ": 这是 UTF-16（FF FE / FE FF），需人工另存为 UTF-8 with BOM")
+            continue
+        }
+
         if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
             $already++
             continue

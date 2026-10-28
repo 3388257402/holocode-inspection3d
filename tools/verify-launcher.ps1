@@ -104,7 +104,10 @@ foreach ($ps1 in $ps1Files) {
     $label = $ps1.Name
     $bytes = [System.IO.File]::ReadAllBytes($ps1.FullName)
     $hasBom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
-    Check "$label 带 UTF-8 BOM" $hasBom "缺 BOM → PS 5.1 按 GBK 读中文会解析失败。修：powershell -ExecutionPolicy Bypass -File tools\fix-bom.ps1"
+    Check "$label 带 UTF-8 BOM" $hasBom ("缺 BOM → PS 5.1 按 GBK 读中文会解析失败。" +
+        "修（推荐）：powershell -ExecutionPolicy Bypass -File tools\fix-bom.ps1 ；" +
+        "若丢 BOM 的正是 fix-bom.ps1 自己（它那时也跑不起来），用这条不依赖它的自救命令：" +
+        'powershell -NoProfile -c "[IO.File]::WriteAllBytes(''' + $ps1.FullName + ''',[byte[]](0xEF,0xBB,0xBF)+[IO.File]::ReadAllBytes(''' + $ps1.FullName + '''))"')
 
     $parseErrors = $null
     $null = [System.Management.Automation.Language.Parser]::ParseFile($ps1.FullName, [ref]$null, [ref]$parseErrors)
