@@ -117,6 +117,20 @@ if ((Test-Path -LiteralPath $launcher) -and (Get-Command cmd.exe -ErrorAction Si
     $restored = $out -match "$target\s*$"
     Check "启动器还原调用方代码页（$target）" $restored "跑完后代码页不是 $target：$($out.Trim())（块内用 !VAR! 但未开延迟展开是最常见原因）"
 }
+# ---- 2.6 git hook 的形态：存在 + 全 LF
+#       为什么查：core.autocrlf=true 的机器 checkout 成 CRLF 后，`#!/bin/sh` 会变成
+#       `#!/bin/sh\r`，git 执行 hook 时报 bad interpreter(127)——看起来像"门禁坏了"，
+#       其实是"行尾被换了"。.gitattributes 里的 `.githooks/** text eol=lf` 是第一道保险，
+#       这里是第二道（防止有人在本地把它改回 CRLF 后提交）。
+$hook = Join-Path $RepoRoot ".githooks/pre-commit"
+if (Test-Path -LiteralPath $hook) {
+    $hookText = [System.IO.File]::ReadAllText($hook)
+    $cr = ([regex]::Matches($hookText, "`r")).Count
+    Check ".githooks/pre-commit 全 LF" ($cr -eq 0) "发现 $cr 个 CR：CRLF 的 hook 会让 git 报 bad interpreter(127)"
+    Check ".githooks/pre-commit 有 shebang" ($hookText.StartsWith('#!')) "缺少 #!/bin/sh，git 无法执行"
+} else {
+    Check ".githooks/pre-commit 存在" $false "缺失则钩子不生效（README 让用户 git config core.hooksPath .githooks）"
+}
 # ---- 3. .gitattributes 是否仍然约束 *.bat 为 CRLF
 $attr = Join-Path $RepoRoot ".gitattributes"
 if (Test-Path -LiteralPath $attr) {

@@ -2,3 +2,6 @@
 # 纯 LF + 中文会让变量展开成空串（实测过：%UNITY% / %PROJ% 都变空）。
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# git hook 必须全 LF：core.autocrlf=true 的机器 checkout 成 CRLF 后，#!/bin/sh 变成 #!/bin/sh\r，git commit 会以 bad interpreter(127) 失败。
+.githooks/** text eol=lf
