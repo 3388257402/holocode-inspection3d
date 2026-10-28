@@ -131,6 +131,32 @@ npm run dev          # 默认 http://localhost:5173
 ——`-batchmode` 只出日志、不出画面。所以它的证据等级是"人工目视确认"，不是自动化证据。
 编译那部分的证据等级是"机器可复现"（命令 + 日志 + 程序集核对，见下一节）。
 
+### 虚拟巡检场景（题目 3.1.1）
+
+场景文件：`unity/Inspection3D/Assets/Scenes/Inspection.unity`（已加入 Build Settings 首位）。
+
+打开方式：双击 `打开Unity工程.bat` → 在 Project 面板双击 `Assets/Scenes/Inspection.unity`。
+打开后 Hierarchy 里能看到整棵树（`__InspectionRoot` 下面）：
+
+| 类别 | 物体 |
+|---|---|
+| 地面 | `Ground`（30×30） |
+| 墙面 | `Wall_Back` / `Wall_Front` / `Wall_Left` / `Wall_Right`（四面围合） |
+| 机柜 | `Cabinet_1` / `Cabinet_2` / `Cabinet_3` —— **可点击**（带 Collider） |
+| 设备 | `Bench` + `Device_1` —— **可点击** |
+| 管线 | `Pipe_1` / `Pipe_2`（圆柱，证明非立方体也能被射线命中） |
+| 玩家 | `Player`（CharacterController）+ `PlayerCamera`（Camera，tag=MainCamera） |
+| 光照 | `Directional Light` |
+
+**为什么有场景文件也有运行时代码**：早期版本只在按 Play 时用代码生成物体，评审打开工程看到的是
+空场景，等于「没搭」。现在物体**烘进 `.unity` 文件**（Hierarchy 里可见），
+搭建逻辑集中在 `Assets/Scripts/InspectionSceneBuilder.cs`，编辑器生成器
+（`Assets/Editor/InspectionSceneMenu.cs`，菜单 `Tools/巡检/生成并保存场景`）
+和运行时兜底共用同一份代码，两者不会漂移。场景里 `environmentAlreadyBuilt=true`，
+所以按 Play 不会再重复生成一套。
+
+重新生成场景（可选）：菜单 `Tools/巡检/生成并保存场景`，或命令行
+`Unity.exe -batchmode -quit -projectPath unity/Inspection3D -executeMethod InspectionSceneMenu.BuildAndSave`。
 ### Unity 编译验证（实测记录）
 
 ```
