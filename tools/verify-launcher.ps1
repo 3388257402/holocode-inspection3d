@@ -104,10 +104,26 @@ foreach ($ps1 in $ps1Files) {
     $label = $ps1.Name
     $bytes = [System.IO.File]::ReadAllBytes($ps1.FullName)
     $hasBom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+    # 双 BOM：EF BB BF EF BB BF。只判前 3 字节会放过它，而文件头那两个 U+FEFF 会一直粘着。
+    # 手动补 BOM 的命令不幂等时就会产生这种文件，所以要单独拦。
+    $doubleBom = ($bytes.Length -ge 6 -and $bytes[3] -eq 0xEF -and $bytes[4] -eq 0xBB -and $bytes[5] -eq 0xBF)
+
+    # 提示里的路径必须是**相对 $RepoRoot** 的：这个检查器最主要的调用方是 pre-commit，
+    # 它跑在临时导出的索引镜像上（-RepoRoot 指向 <TEMP>/holocode-precommit.<pid>）。
+    # 若把 $ps1.FullName 的绝对路径写进提示，人照抄只会改镜像副本 —— 真仓库没变、下次提交照红，
+    # 而且 hook 退出时 trap 已把镜像删掉，那条命令还会直接报"找不到文件"。
+    $relPath = $ps1.FullName.Substring($RepoRoot.Length).TrimStart('\', '/')
+    # 自救命令必须**幂等**：已有 BOM 就不动，否则会拼出双 BOM。
+    $selfFix = 'powershell -NoProfile -c "$p=''' + $relPath + ''';
+        $b=[IO.File]::ReadAllBytes($p);
+        if(-not($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)){[IO.File]::WriteAllBytes($p,[byte[]](0xEF,0xBB,0xBF)+$b)}"'
+    $selfFix = ($selfFix -replace "`r?`n", ' ')
+
     Check "$label 带 UTF-8 BOM" $hasBom ("缺 BOM → PS 5.1 按 GBK 读中文会解析失败。" +
-        "修（推荐）：powershell -ExecutionPolicy Bypass -File tools\fix-bom.ps1 ；" +
-        "若丢 BOM 的正是 fix-bom.ps1 自己（它那时也跑不起来），用这条不依赖它的自救命令：" +
-        'powershell -NoProfile -c "[IO.File]::WriteAllBytes(''' + $ps1.FullName + ''',[byte[]](0xEF,0xBB,0xBF)+[IO.File]::ReadAllBytes(''' + $ps1.FullName + '''))"')
+        "修（推荐，在**本仓库根目录**执行）：powershell -ExecutionPolicy Bypass -File tools\fix-bom.ps1 ；" +
+        "若丢 BOM 的正是 fix-bom.ps1 自己（它那时也跑不起来），用这条幂等自救命令（同样在仓库根目录执行）：" +
+        $selfFix)
+    Check "$label 没有重复 BOM" (-not $doubleBom) "文件头有两个 EF BB BF（双 BOM），会残留两个 U+FEFF，需人工删掉多余的那个"
 
     $parseErrors = $null
     $null = [System.Management.Automation.Language.Parser]::ParseFile($ps1.FullName, [ref]$null, [ref]$parseErrors)
