@@ -23,12 +23,18 @@ REM colon. If a locale prints something else, OLDCP stays empty and the restore 
 REM is skipped -- exactly the silent regression this file was fixed for once already.
 for /f "tokens=2 delims=:" %%C in ('chcp') do set "OLDCP=%%C"
 if defined OLDCP set "OLDCP=%OLDCP: =%"
-REM Fallback that does NOT depend on localized text: the ANSI code page lives in the
-REM registry as hex. `set /a` converts 0x3A8 -> 936.
-if not defined OLDCP (
-  for /f "tokens=3" %%R in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Nls\CodePage" /v ACP 2^>nul') do set "ACPHEX=%%R"
-  if defined ACPHEX set /a OLDCP=0x%ACPHEX% >nul 2>&1
-)
+REM Fallback that does NOT depend on localized text. Two things that are easy to get
+REM wrong here (both measured):
+REM   1. The console code page is the OEM code page, not the ANSI one. On a Western
+REM      locale ACP=1252 while the console is 65001/850 -- restoring ACP would pick a
+REM      page the console never had. So read OEMCP.
+REM   2. `reg query` prints it DECIMAL ("OEMCP  REG_SZ  936"); there is no 0x prefix.
+REM   3. The parse must live OUTSIDE any parenthesised block: %VAR% is expanded when
+REM      the block is parsed, so a value assigned inside the same block is still empty
+REM      there (measured: OLDCP stayed empty while the variable did get set).
+set "OEMCP="
+if not defined OLDCP for /f "tokens=3" %%R in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Nls\CodePage" /v OEMCP 2^>nul') do set "OEMCP=%%R"
+if not defined OLDCP if defined OEMCP set "OLDCP=%OEMCP%"
 chcp 65001 >nul
 
 if not exist "%~dp0scripts\open-unity.ps1" (
